@@ -669,7 +669,7 @@ int main(int argc, char* argv[]) {
   const bool plotField = true;
   const bool plotDrift = false;
   const bool enableAdaptiveTimestep = true;
-  constexpr std::size_t avalancheSizeLimit = 500000; // 5000
+  constexpr std::size_t avalancheSizeLimit = 5000; // 5000
   constexpr double spaceChargeBinWidth = 2.e-4;
   constexpr Long64_t maxTotalIonisations = 500000;  // 500000
 
@@ -687,6 +687,7 @@ int main(int argc, char* argv[]) {
       MediumMagboltz gas;
       // gas.SetComposition("ar", 93, "co2", 7);
       gas.SetComposition("C2H2F4", 60., "iC4H10", 30., "SF6", 10.);  // [%]
+      // gas.SetComposition("ar", 80, "co2", 10, "iC4H10", 10);  // [%]
       gas.SetTemperature(293.15);
       gas.SetPressure(760. * pressureAtm);
       gas.LoadIonMobility("IonMobility_Ar+_Ar.txt");
