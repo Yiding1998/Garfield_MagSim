@@ -116,6 +116,7 @@ Long64_t totalAttachedElectrons = 0;
 int currentEventId = -1;
 
 struct PreviousCollisionState {
+  double x = 0., y = 0., z = 0.;
   double px = 0., py = 0., pz = 0.;
 };
 
@@ -127,6 +128,13 @@ struct CollisionHistograms {
   std::map<int, std::unique_ptr<TH1D>> energyByType;
   std::unique_ptr<TH1D> fieldImpulseMagnitude;
   std::unique_ptr<TH1D> freeFlightDeltaPMagnitude;
+  std::unique_ptr<TH1D> interCollisionDeltaX;
+  std::unique_ptr<TH1D> interCollisionDeltaY;
+  std::unique_ptr<TH1D> interCollisionDeltaZ;
+  std::unique_ptr<TH1D> interCollisionAbsDeltaX;
+  std::unique_ptr<TH1D> interCollisionAbsDeltaY;
+  std::unique_ptr<TH1D> interCollisionAbsDeltaZ;
+  std::unique_ptr<TH1D> interCollisionDistance;
   std::unique_ptr<TH1D> positionX;
   std::unique_ptr<TH1D> positionY;
   std::unique_ptr<TH1D> positionZ;
@@ -206,6 +214,34 @@ void initialiseCollisionHistograms(const double gap) {
       "free_flight_delta_p_magnitude",
       "Total mechanical momentum change between collisions;|Delta p| [eV/c];flights",
       300, 0., 100.);
+  collisionHistograms.interCollisionDeltaX = makeExtendableHistogram(
+      "inter_collision_delta_x",
+      "Signed displacement between collisions;#Delta x [cm];flights", 300,
+      -1.e-3, 1.e-3);
+  collisionHistograms.interCollisionDeltaY = makeExtendableHistogram(
+      "inter_collision_delta_y",
+      "Signed displacement between collisions;#Delta y [cm];flights", 300,
+      -1.e-3, 1.e-3);
+  collisionHistograms.interCollisionDeltaZ = makeExtendableHistogram(
+      "inter_collision_delta_z",
+      "Signed displacement between collisions;#Delta z [cm];flights", 300,
+      -1.e-3, 1.e-3);
+  collisionHistograms.interCollisionAbsDeltaX = makeExtendableHistogram(
+      "inter_collision_abs_delta_x",
+      "Absolute displacement between collisions;|#Delta x| [cm];flights",
+      300, 0., 1.e-3);
+  collisionHistograms.interCollisionAbsDeltaY = makeExtendableHistogram(
+      "inter_collision_abs_delta_y",
+      "Absolute displacement between collisions;|#Delta y| [cm];flights",
+      300, 0., 1.e-3);
+  collisionHistograms.interCollisionAbsDeltaZ = makeExtendableHistogram(
+      "inter_collision_abs_delta_z",
+      "Absolute displacement between collisions;|#Delta z| [cm];flights",
+      300, 0., 1.e-3);
+  collisionHistograms.interCollisionDistance = makeExtendableHistogram(
+      "inter_collision_distance",
+      "Distance between collision points;#Delta r [cm];flights", 300, 0.,
+      1.e-3);
   collisionHistograms.positionX = makeExtendableHistogram(
       "collision_position_x", "Collision position;x [cm];collisions", 200,
       -0.02, 0.02);
@@ -296,8 +332,20 @@ void userHandleCollision(double x, double y, double z, double t, int type,
     const double deltaPZ = momentumBeforeZ - previous->second.pz;
     collisionHistograms.freeFlightDeltaPMagnitude->Fill(
         std::sqrt(deltaPX * deltaPX + deltaPY * deltaPY + deltaPZ * deltaPZ));
+
+    const double deltaX = x - previous->second.x;
+    const double deltaY = y - previous->second.y;
+    const double deltaZ = z - previous->second.z;
+    collisionHistograms.interCollisionDeltaX->Fill(deltaX);
+    collisionHistograms.interCollisionDeltaY->Fill(deltaY);
+    collisionHistograms.interCollisionDeltaZ->Fill(deltaZ);
+    collisionHistograms.interCollisionAbsDeltaX->Fill(std::abs(deltaX));
+    collisionHistograms.interCollisionAbsDeltaY->Fill(std::abs(deltaY));
+    collisionHistograms.interCollisionAbsDeltaZ->Fill(std::abs(deltaZ));
+    collisionHistograms.interCollisionDistance->Fill(
+        std::sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ));
   }
-  previousCollisions[trackId] = {momentumAfterX, momentumAfterY,
+  previousCollisions[trackId] = {x, y, z, momentumAfterX, momentumAfterY,
                                  momentumAfterZ};
 }
 
@@ -474,6 +522,13 @@ void writeCollisionStatistics() {
   collisionHistograms.attachmentEnergyAfter->Write();
   collisionHistograms.fieldImpulseMagnitude->Write();
   collisionHistograms.freeFlightDeltaPMagnitude->Write();
+  collisionHistograms.interCollisionDeltaX->Write();
+  collisionHistograms.interCollisionDeltaY->Write();
+  collisionHistograms.interCollisionDeltaZ->Write();
+  collisionHistograms.interCollisionAbsDeltaX->Write();
+  collisionHistograms.interCollisionAbsDeltaY->Write();
+  collisionHistograms.interCollisionAbsDeltaZ->Write();
+  collisionHistograms.interCollisionDistance->Write();
   collisionHistograms.positionX->Write();
   collisionHistograms.positionY->Write();
   collisionHistograms.positionZ->Write();
@@ -566,6 +621,34 @@ void writeCollisionStatistics() {
   }
   writeCanvasWithPngImage(typeCanvas, "collision_energy_by_type",
                           "collision_energy_by_type_png");
+
+  TCanvas* signedDisplacementCanvas =
+      new TCanvas("inter_collision_signed_displacement", "", 1200, 400);
+  signedDisplacementCanvas->Divide(3, 1);
+  signedDisplacementCanvas->cd(1);
+  collisionHistograms.interCollisionDeltaX->Draw();
+  signedDisplacementCanvas->cd(2);
+  collisionHistograms.interCollisionDeltaY->Draw();
+  signedDisplacementCanvas->cd(3);
+  collisionHistograms.interCollisionDeltaZ->Draw();
+  writeCanvasWithPngImage(signedDisplacementCanvas,
+                          "inter_collision_signed_displacement",
+                          "inter_collision_signed_displacement_png");
+
+  TCanvas* displacementCanvas =
+      new TCanvas("inter_collision_distance_statistics", "", 1100, 800);
+  displacementCanvas->Divide(2, 2);
+  displacementCanvas->cd(1);
+  collisionHistograms.interCollisionAbsDeltaX->Draw();
+  displacementCanvas->cd(2);
+  collisionHistograms.interCollisionAbsDeltaY->Draw();
+  displacementCanvas->cd(3);
+  collisionHistograms.interCollisionAbsDeltaZ->Draw();
+  displacementCanvas->cd(4);
+  collisionHistograms.interCollisionDistance->Draw();
+  writeCanvasWithPngImage(displacementCanvas,
+                          "inter_collision_distance_statistics",
+                          "inter_collision_distance_png");
 
   TCanvas* positionCanvas =
       new TCanvas("collision_position_time_statistics", "", 1100, 800);

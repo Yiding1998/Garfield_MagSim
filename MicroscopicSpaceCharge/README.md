@@ -1220,3 +1220,38 @@ collision_source_summary->Scan();
 `electron_collisions` 已完全取消。碰撞能量、碰撞类型、分子来源、过程来源、位置、时间、电场冲量和自由飞行动量变化均只保存为汇总直方图、汇总树和 PNG 图像。
 
 旧文件中该树可占总空间的 99% 以上；取消逐碰撞明细后，文件大小主要由少量直方图、画布、PNG、电子末态和运行汇总决定。`electron_birth_sources` 仍按雪崩产生的电子逐行保存，通常远小于逐碰撞数据。
+
+
+## 23. 相邻碰撞之间的电子位移统计
+
+程序按照稳定的电子 `trackId`，将同一电子当前真实碰撞位置与上一次真实碰撞位置配对。每个电子的第一次碰撞只用于初始化位置，不填入位移统计；每个雪崩事例开始时清空上一碰撞状态，数据不会跨事例错误配对。
+
+对于相邻碰撞位置 `(x1, y1, z1)` 和 `(x2, y2, z2)`，定义：
+
+```text
+Delta x = x2 - x1
+Delta y = y2 - y1
+Delta z = z2 - z1
+Delta r = sqrt(Delta x^2 + Delta y^2 + Delta z^2)
+```
+
+单位均为 cm。程序同时统计：
+
+- 带符号位移：`inter_collision_delta_x/y/z`；
+- 各方向绝对位移：`inter_collision_abs_delta_x/y/z`；
+- 三维总位移：`inter_collision_distance`。
+
+这些量在碰撞回调中直接填入直方图，不保存逐次数据，也不创建新的 TTree。对应汇总图为：
+
+- `inter_collision_signed_displacement` 和 `inter_collision_signed_displacement_png`；
+- `inter_collision_distance_statistics` 和 `inter_collision_distance_png`。
+
+ROOT 中可以直接绘制：
+
+```cpp
+inter_collision_delta_x->Draw();
+inter_collision_abs_delta_y->Draw();
+inter_collision_distance->Draw();
+```
+
+`Delta r` 是两个碰撞点之间的直线距离。电子在电场和磁场中的真实轨迹可能弯曲，因此它不是两次碰撞之间沿轨迹积分得到的弧长。若需要真实飞行路程，必须在 Garfield++ 的微观漂移步进内部额外累计每个飞行段长度。
