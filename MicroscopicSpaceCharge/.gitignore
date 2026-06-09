@@ -1,0 +1,21 @@
+# CMake build directories and generated files
+build/
+build_*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Simulation output
+*.root
+
+# Generated executables and libraries
+MicroscopicSpaceCharge
+*.o
+*.so
+*.pcm
+
+# Editor and operating-system files
+*~
+*.swp
+.DS_Store
