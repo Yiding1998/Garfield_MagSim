@@ -1041,7 +1041,7 @@ p(E) = sqrt(E * (E + 2 m_e c^2))
 m_e c^2 = 510998.95 eV
 ```
 
-动量单位为 `eV/c`。再乘以 Garfield++ 返回的归一化方向，得到三个方向的动量分量。
+动量单位为 `eV/c`。程序在碰撞回调中临时结合 Garfield++ 返回的方向计算矢量动量，用于得到总动量变化；方向和动量分量不写入 TTree。
 
 ### 22.4 电场冲量
 
@@ -1062,16 +1062,13 @@ Delta p_E ~= q E(midpoint) Delta t
 - 平行板外加电场；
 - 开启空间电荷时的 charged-ring 电场。
 
-保存字段为：
+最终只保存冲量大小分布：
 
 ```text
-fieldImpulseX
-fieldImpulseY
-fieldImpulseZ
-fieldImpulseMagnitude
+field_impulse_magnitude
 ```
 
-单位均为 `eV/c`。
+它是 ROOT 直方图，不保存每次自由飞行的冲量数据。单位为 `eV/c`。
 
 这是对严格积分的逐飞行段数值近似。空间电荷场变化很快时，可进一步将一次自由飞行细分为更多积分段以提高精度。
 
@@ -1083,18 +1080,13 @@ fieldImpulseMagnitude
 Delta p_mechanical = p_before(current) - p_after(previous)
 ```
 
-对应字段为：
+程序只保留矢量差的模：
 
 ```text
-freeFlightDeltaPX
-freeFlightDeltaPY
-freeFlightDeltaPZ
-freeFlightDeltaPMagnitude
+free_flight_delta_p_magnitude
 ```
 
-单位为 `eV/c`。
-
-`hasPreviousCollision = 1` 时这些量才表示相邻两次真实碰撞之间的变化。第一碰撞没有前一碰撞，因此 `hasPreviousCollision = 0`。
+它是 ROOT 直方图，不保存三个分量或逐次自由飞行数据，单位为 `eV/c`。每条电子轨迹的第一次碰撞没有前一碰撞，因此不会填入该直方图。
 
 无磁场且电场积分足够精确时，机械动量变化应接近电场冲量。在磁场中，机械动量变化还包含洛伦兹力造成的方向变化，因此它不应被解释为纯电场贡献。
 
@@ -1163,23 +1155,11 @@ isPenning = 1
 | `parentTrackId` | 产生当前电子的母电子轨迹编号 |
 | `hasParent` | 是否具有母轨迹 |
 | `collisionIndex` | 当前电子内部的碰撞序号，从 0 开始 |
-| `x`, `y`, `z`, `time` | 碰撞位置和时间，单位 cm、ns |
 | `type`, `level` | Garfield++ 碰撞类型和 Magboltz 能级 |
 | `gasIndex`, `gasName` | 碰撞气体组分 |
 | `process` | Magboltz 碰撞过程描述 |
 | `thresholdEnergy` | 该截面过程的阈值能量，单位 eV |
 | `energyBefore`, `energyAfter` | 碰撞前后动能，单位 eV |
-| `directionBeforeX/Y/Z` | 碰撞前方向 |
-| `directionAfterX/Y/Z` | 碰撞后方向 |
-| `momentumBeforeX/Y/Z` | 碰撞前动量，单位 eV/c |
-| `momentumAfterX/Y/Z` | 碰撞后动量，单位 eV/c |
-| `fieldImpulseX/Y/Z` | 相邻真实碰撞间电场冲量，单位 eV/c |
-| `fieldImpulseMagnitude` | 电场冲量大小 |
-| `hasPreviousCollision` | 是否存在同一电子的前一次碰撞 |
-| `freeFlightDeltaPX/PY/PZ` | 相邻碰撞间机械动量变化 |
-| `freeFlightDeltaPMagnitude` | 机械动量变化大小 |
-| `deltaTime` | 相邻碰撞时间间隔，单位 ns |
-| `deltaLength` | 相邻碰撞点直线距离，单位 cm |
 | `isIonisation` | 是否为直接电离碰撞 |
 | `isAttachment` | 是否为吸附碰撞 |
 | `isPenning` | 该激发碰撞是否产生 Penning 电子 |
@@ -1200,7 +1180,10 @@ isPenning = 1
 - `ionisation_electron_sources`；
 - `attachment_sources`；
 - `field_impulse_magnitude`；
-- `free_flight_delta_p_magnitude`。
+- `free_flight_delta_p_magnitude`；
+- `collision_position_x/y/z`；
+- `collision_time`；
+- `collision_position_time_statistics` 和 `collision_position_time_statistics_png`。
 
 ### 22.10 ROOT 分析示例
 
@@ -1219,20 +1202,16 @@ electron_collisions->Scan(
     "isAttachment == 1");
 ```
 
-查看相邻碰撞动量统计：
+查看相邻碰撞总动量变化统计：
 
 ```cpp
-electron_collisions->Draw(
-    "freeFlightDeltaPMagnitude",
-    "hasPreviousCollision == 1");
+free_flight_delta_p_magnitude->Draw();
 ```
 
-比较电场冲量和机械动量变化：
+查看电场冲量大小统计：
 
 ```cpp
-electron_collisions->Draw(
-    "freeFlightDeltaPMagnitude:fieldImpulseMagnitude",
-    "hasPreviousCollision == 1", "colz");
+field_impulse_magnitude->Draw();
 ```
 
 查看雪崩电子由哪些分子产生：
@@ -1249,6 +1228,6 @@ collision_source_summary->Scan();
 
 ### 22.11 数据量和性能
 
-`electron_collisions` 保存每一次真实碰撞，数据量通常远大于电子数和电离数。一个电子在到达极板或被吸附前可能发生数千次碰撞。高增益事例可能产生很大的 ROOT 文件，并占用较多内存。
+`electron_collisions` 仍保存每次真实碰撞的能量、类型、轨迹编号和分子来源，但不再保存位置、时间、方向、动量分量、电场冲量和自由飞行动量变化的逐条数据。这些运动学量仅保存为汇总直方图和 PNG 图像，从而显著降低 ROOT 文件大小。
 
-建议先用小事例数测试参数点，再进行大规模运行。对于极高增益扫描，可以后续增加碰撞抽样比例或边运行边写 TTree 的流式模式，但这会改变当前“保存全部碰撞”的约定。
+高增益事例仍可能产生大量能量和来源记录。若文件依然过大，可进一步用 `level` 映射表替代逐行重复的 `gasName` 和 `process` 字符串。

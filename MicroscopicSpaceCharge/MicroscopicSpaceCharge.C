@@ -121,29 +121,26 @@ struct CollisionRecord {
   ULong64_t parentTrackId = 0;
   int hasParent = 0;
   int collisionIndex = 0;
-  double x = 0., y = 0., z = 0., time = 0.;
   int type = 0, level = 0, gasIndex = -1;
   std::string gasName;
   std::string process;
   double thresholdEnergy = 0.;
   double energyBefore = 0., energyAfter = 0.;
-  double directionBeforeX = 0., directionBeforeY = 0., directionBeforeZ = 0.;
-  double directionAfterX = 0., directionAfterY = 0., directionAfterZ = 0.;
-  double momentumBeforeX = 0., momentumBeforeY = 0., momentumBeforeZ = 0.;
-  double momentumAfterX = 0., momentumAfterY = 0., momentumAfterZ = 0.;
-  double fieldImpulseX = 0., fieldImpulseY = 0., fieldImpulseZ = 0.;
-  double fieldImpulseMagnitude = 0.;
-  int hasPreviousCollision = 0;
-  double freeFlightDeltaPX = 0., freeFlightDeltaPY = 0.;
-  double freeFlightDeltaPZ = 0., freeFlightDeltaPMagnitude = 0.;
-  double deltaTime = 0., deltaLength = 0.;
   int isIonisation = 0, isAttachment = 0, isPenning = 0;
 };
 
 struct PreviousCollisionState {
   int collisionIndex = 0;
-  double x = 0., y = 0., z = 0., time = 0.;
   double px = 0., py = 0., pz = 0.;
+};
+
+struct CollisionHistograms {
+  std::unique_ptr<TH1D> fieldImpulseMagnitude;
+  std::unique_ptr<TH1D> freeFlightDeltaPMagnitude;
+  std::unique_ptr<TH1D> positionX;
+  std::unique_ptr<TH1D> positionY;
+  std::unique_ptr<TH1D> positionZ;
+  std::unique_ptr<TH1D> collisionTime;
 };
 
 struct ElectronBirthSource {
@@ -159,6 +156,41 @@ struct ElectronBirthSource {
 std::vector<CollisionRecord> collisionRecords;
 std::vector<ElectronBirthSource> electronBirthSources;
 std::unordered_map<std::size_t, PreviousCollisionState> previousCollisions;
+CollisionHistograms collisionHistograms;
+
+std::unique_ptr<TH1D> makeExtendableHistogram(const char* name,
+                                              const char* title,
+                                              const int bins,
+                                              const double minimum,
+                                              const double maximum) {
+  auto histogram =
+      std::make_unique<TH1D>(name, title, bins, minimum, maximum);
+  histogram->SetDirectory(nullptr);
+  histogram->SetCanExtend(TH1::kXaxis);
+  return histogram;
+}
+
+void initialiseCollisionHistograms(const double gap) {
+  collisionHistograms.fieldImpulseMagnitude = makeExtendableHistogram(
+      "field_impulse_magnitude",
+      "Electric-field impulse between collisions;|q integral E dt| [eV/c];flights",
+      300, 0., 100.);
+  collisionHistograms.freeFlightDeltaPMagnitude = makeExtendableHistogram(
+      "free_flight_delta_p_magnitude",
+      "Total mechanical momentum change between collisions;|Delta p| [eV/c];flights",
+      300, 0., 100.);
+  collisionHistograms.positionX = makeExtendableHistogram(
+      "collision_position_x", "Collision position;x [cm];collisions", 200,
+      -0.02, 0.02);
+  collisionHistograms.positionY = makeExtendableHistogram(
+      "collision_position_y", "Collision position;y [cm];collisions", 200,
+      0., gap);
+  collisionHistograms.positionZ = makeExtendableHistogram(
+      "collision_position_z", "Collision position;z [cm];collisions", 200,
+      -0.02, 0.02);
+  collisionHistograms.collisionTime = makeExtendableHistogram(
+      "collision_time", "Collision time;t [ns];collisions", 200, 0., 5.);
+}
 
 void getCollisionSource(Medium* medium, const int level, int& gasIndex,
                         std::string& gasName, std::string& process,
@@ -196,61 +228,43 @@ void userHandleCollision(double x, double y, double z, double t, int type,
   record.trackId = static_cast<ULong64_t>(trackId);
   record.parentTrackId = static_cast<ULong64_t>(parentTrackId);
   record.hasParent = parentTrackId != NoTrackId;
-  record.x = x;
-  record.y = y;
-  record.z = z;
-  record.time = t;
   record.type = type;
   record.level = level;
   getCollisionSource(medium, level, record.gasIndex, record.gasName,
                      record.process, record.thresholdEnergy);
   record.energyBefore = energyBefore;
   record.energyAfter = energyAfter;
-  record.directionBeforeX = dxBefore;
-  record.directionBeforeY = dyBefore;
-  record.directionBeforeZ = dzBefore;
-  record.directionAfterX = dxAfter;
-  record.directionAfterY = dyAfter;
-  record.directionAfterZ = dzAfter;
   const double pBefore = momentumMagnitude(energyBefore);
   const double pAfter = momentumMagnitude(energyAfter);
-  record.momentumBeforeX = pBefore * dxBefore;
-  record.momentumBeforeY = pBefore * dyBefore;
-  record.momentumBeforeZ = pBefore * dzBefore;
-  record.momentumAfterX = pAfter * dxAfter;
-  record.momentumAfterY = pAfter * dyAfter;
-  record.momentumAfterZ = pAfter * dzAfter;
-  record.fieldImpulseX = fieldImpulseX;
-  record.fieldImpulseY = fieldImpulseY;
-  record.fieldImpulseZ = fieldImpulseZ;
-  record.fieldImpulseMagnitude =
+  const double momentumBeforeX = pBefore * dxBefore;
+  const double momentumBeforeY = pBefore * dyBefore;
+  const double momentumBeforeZ = pBefore * dzBefore;
+  const double momentumAfterX = pAfter * dxAfter;
+  const double momentumAfterY = pAfter * dyAfter;
+  const double momentumAfterZ = pAfter * dzAfter;
+  const double fieldImpulseMagnitude =
       std::sqrt(fieldImpulseX * fieldImpulseX +
                 fieldImpulseY * fieldImpulseY +
                 fieldImpulseZ * fieldImpulseZ);
+  collisionHistograms.fieldImpulseMagnitude->Fill(fieldImpulseMagnitude);
+  collisionHistograms.positionX->Fill(x);
+  collisionHistograms.positionY->Fill(y);
+  collisionHistograms.positionZ->Fill(z);
+  collisionHistograms.collisionTime->Fill(t);
   record.isIonisation = type == ElectronCollisionTypeIonisation;
   record.isAttachment = type == ElectronCollisionTypeAttachment;
 
   auto previous = previousCollisions.find(trackId);
   if (previous != previousCollisions.end()) {
-    record.hasPreviousCollision = 1;
     record.collisionIndex = previous->second.collisionIndex + 1;
-    record.freeFlightDeltaPX = record.momentumBeforeX - previous->second.px;
-    record.freeFlightDeltaPY = record.momentumBeforeY - previous->second.py;
-    record.freeFlightDeltaPZ = record.momentumBeforeZ - previous->second.pz;
-    record.freeFlightDeltaPMagnitude =
-        std::sqrt(record.freeFlightDeltaPX * record.freeFlightDeltaPX +
-                  record.freeFlightDeltaPY * record.freeFlightDeltaPY +
-                  record.freeFlightDeltaPZ * record.freeFlightDeltaPZ);
-    record.deltaTime = t - previous->second.time;
-    record.deltaLength =
-        std::sqrt((x - previous->second.x) * (x - previous->second.x) +
-                  (y - previous->second.y) * (y - previous->second.y) +
-                  (z - previous->second.z) * (z - previous->second.z));
+    const double deltaPX = momentumBeforeX - previous->second.px;
+    const double deltaPY = momentumBeforeY - previous->second.py;
+    const double deltaPZ = momentumBeforeZ - previous->second.pz;
+    collisionHistograms.freeFlightDeltaPMagnitude->Fill(
+        std::sqrt(deltaPX * deltaPX + deltaPY * deltaPY + deltaPZ * deltaPZ));
   }
-  previousCollisions[trackId] = {record.collisionIndex, x, y, z, t,
-                                 record.momentumAfterX,
-                                 record.momentumAfterY,
-                                 record.momentumAfterZ};
+  previousCollisions[trackId] = {record.collisionIndex, momentumAfterX,
+                                 momentumAfterY, momentumAfterZ};
   collisionRecords.push_back(std::move(record));
 }
 
@@ -432,10 +446,6 @@ void writeCollisionStatistics() {
   collisionTree.Branch("parentTrackId", &row.parentTrackId);
   collisionTree.Branch("hasParent", &row.hasParent);
   collisionTree.Branch("collisionIndex", &row.collisionIndex);
-  collisionTree.Branch("x", &row.x);
-  collisionTree.Branch("y", &row.y);
-  collisionTree.Branch("z", &row.z);
-  collisionTree.Branch("time", &row.time);
   collisionTree.Branch("type", &row.type);
   collisionTree.Branch("level", &row.level);
   collisionTree.Branch("gasIndex", &row.gasIndex);
@@ -444,48 +454,15 @@ void writeCollisionStatistics() {
   collisionTree.Branch("thresholdEnergy", &row.thresholdEnergy);
   collisionTree.Branch("energyBefore", &row.energyBefore);
   collisionTree.Branch("energyAfter", &row.energyAfter);
-  collisionTree.Branch("directionBeforeX", &row.directionBeforeX);
-  collisionTree.Branch("directionBeforeY", &row.directionBeforeY);
-  collisionTree.Branch("directionBeforeZ", &row.directionBeforeZ);
-  collisionTree.Branch("directionAfterX", &row.directionAfterX);
-  collisionTree.Branch("directionAfterY", &row.directionAfterY);
-  collisionTree.Branch("directionAfterZ", &row.directionAfterZ);
-  collisionTree.Branch("momentumBeforeX", &row.momentumBeforeX);
-  collisionTree.Branch("momentumBeforeY", &row.momentumBeforeY);
-  collisionTree.Branch("momentumBeforeZ", &row.momentumBeforeZ);
-  collisionTree.Branch("momentumAfterX", &row.momentumAfterX);
-  collisionTree.Branch("momentumAfterY", &row.momentumAfterY);
-  collisionTree.Branch("momentumAfterZ", &row.momentumAfterZ);
-  collisionTree.Branch("fieldImpulseX", &row.fieldImpulseX);
-  collisionTree.Branch("fieldImpulseY", &row.fieldImpulseY);
-  collisionTree.Branch("fieldImpulseZ", &row.fieldImpulseZ);
-  collisionTree.Branch("fieldImpulseMagnitude", &row.fieldImpulseMagnitude);
-  collisionTree.Branch("hasPreviousCollision", &row.hasPreviousCollision);
-  collisionTree.Branch("freeFlightDeltaPX", &row.freeFlightDeltaPX);
-  collisionTree.Branch("freeFlightDeltaPY", &row.freeFlightDeltaPY);
-  collisionTree.Branch("freeFlightDeltaPZ", &row.freeFlightDeltaPZ);
-  collisionTree.Branch("freeFlightDeltaPMagnitude",
-                       &row.freeFlightDeltaPMagnitude);
-  collisionTree.Branch("deltaTime", &row.deltaTime);
-  collisionTree.Branch("deltaLength", &row.deltaLength);
   collisionTree.Branch("isIonisation", &row.isIonisation);
   collisionTree.Branch("isAttachment", &row.isAttachment);
   collisionTree.Branch("isPenning", &row.isPenning);
 
   double maxEnergy = 1.;
-  double maxImpulse = 1.;
-  double maxDeltaP = 1.;
   for (const auto& collision : collisionRecords) {
     maxEnergy = std::max(maxEnergy, collision.energyBefore);
-    maxImpulse = std::max(maxImpulse, collision.fieldImpulseMagnitude);
-    if (collision.hasPreviousCollision) {
-      maxDeltaP = std::max(maxDeltaP,
-                           collision.freeFlightDeltaPMagnitude);
-    }
   }
   maxEnergy *= 1.05;
-  maxImpulse *= 1.05;
-  maxDeltaP *= 1.05;
   TH1D collisionEnergy("collision_energy_before",
                        "Energy at every real collision;energy before [eV];collisions",
                        300, 0., maxEnergy);
@@ -497,14 +474,6 @@ void writeCollisionStatistics() {
       "attachment_energy_after",
       "Post-collision attachment energy;energy after attachment [eV];electrons",
       200, 0., maxEnergy);
-  TH1D fieldImpulse(
-      "field_impulse_magnitude",
-      "Electric-field impulse between collisions;|q integral E dt| [eV/c];flights",
-      300, 0., maxImpulse);
-  TH1D freeFlightDeltaP(
-      "free_flight_delta_p_magnitude",
-      "Mechanical momentum change between collisions;|p before-next - p after-previous| [eV/c];flights",
-      300, 0., maxDeltaP);
   std::map<int, std::unique_ptr<TH1D>> energyByType;
   const std::array<std::pair<int, const char*>, 6> collisionTypes = {{
       {ElectronCollisionTypeElastic, "elastic"},
@@ -524,10 +493,6 @@ void writeCollisionStatistics() {
     row = collision;
     collisionTree.Fill();
     collisionEnergy.Fill(collision.energyBefore);
-    fieldImpulse.Fill(collision.fieldImpulseMagnitude);
-    if (collision.hasPreviousCollision) {
-      freeFlightDeltaP.Fill(collision.freeFlightDeltaPMagnitude);
-    }
     if (collision.isAttachment) {
       attachmentEnergyBefore.Fill(collision.energyBefore);
       attachmentEnergyAfter.Fill(collision.energyAfter);
@@ -541,8 +506,12 @@ void writeCollisionStatistics() {
   collisionEnergy.Write();
   attachmentEnergyBefore.Write();
   attachmentEnergyAfter.Write();
-  fieldImpulse.Write();
-  freeFlightDeltaP.Write();
+  collisionHistograms.fieldImpulseMagnitude->Write();
+  collisionHistograms.freeFlightDeltaPMagnitude->Write();
+  collisionHistograms.positionX->Write();
+  collisionHistograms.positionY->Write();
+  collisionHistograms.positionZ->Write();
+  collisionHistograms.collisionTime->Write();
   for (auto& item : energyByType) item.second->Write();
 
   TTree birthTree("electron_birth_sources",
@@ -621,11 +590,26 @@ void writeCollisionStatistics() {
   collisionCanvas->cd(2);
   attachmentEnergyBefore.Draw();
   collisionCanvas->cd(3);
-  fieldImpulse.Draw();
+  collisionHistograms.fieldImpulseMagnitude->Draw();
   collisionCanvas->cd(4);
-  freeFlightDeltaP.Draw();
+  collisionHistograms.freeFlightDeltaPMagnitude->Draw();
   writeCanvasWithPngImage(collisionCanvas, "collision_statistics",
                           "collision_statistics_png");
+
+  TCanvas* positionCanvas =
+      new TCanvas("collision_position_time_statistics", "", 1100, 800);
+  positionCanvas->Divide(2, 2);
+  positionCanvas->cd(1);
+  collisionHistograms.positionX->Draw();
+  positionCanvas->cd(2);
+  collisionHistograms.positionY->Draw();
+  positionCanvas->cd(3);
+  collisionHistograms.positionZ->Draw();
+  positionCanvas->cd(4);
+  collisionHistograms.collisionTime->Draw();
+  writeCanvasWithPngImage(positionCanvas,
+                          "collision_position_time_statistics",
+                          "collision_position_time_statistics_png");
 
   TCanvas* sourceCanvas = new TCanvas("collision_sources", "", 1200, 600);
   sourceCanvas->Divide(2, 1);
@@ -664,6 +648,7 @@ int main(int argc, char* argv[]) {
 
   const double posBottomPlane = 0.;
   const double posTopPlane = gapUm * 1.e-4;
+  initialiseCollisionHistograms(posTopPlane - posBottomPlane);
 
   const bool enableDebug = false;
   const bool plotField = true;
