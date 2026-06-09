@@ -115,32 +115,29 @@ Long64_t totalIonisationElectrons = 0;
 Long64_t totalAttachedElectrons = 0;
 int currentEventId = -1;
 
-struct CollisionRecord {
-  int event = -1;
-  ULong64_t trackId = 0;
-  ULong64_t parentTrackId = 0;
-  int hasParent = 0;
-  int collisionIndex = 0;
-  int type = 0, level = 0, gasIndex = -1;
-  std::string gasName;
-  std::string process;
-  double thresholdEnergy = 0.;
-  double energyBefore = 0., energyAfter = 0.;
-  int isIonisation = 0, isAttachment = 0, isPenning = 0;
-};
-
 struct PreviousCollisionState {
-  int collisionIndex = 0;
   double px = 0., py = 0., pz = 0.;
 };
 
 struct CollisionHistograms {
+  std::unique_ptr<TH1D> energyBefore;
+  std::unique_ptr<TH1D> energyAfter;
+  std::unique_ptr<TH1D> attachmentEnergyBefore;
+  std::unique_ptr<TH1D> attachmentEnergyAfter;
+  std::map<int, std::unique_ptr<TH1D>> energyByType;
   std::unique_ptr<TH1D> fieldImpulseMagnitude;
   std::unique_ptr<TH1D> freeFlightDeltaPMagnitude;
   std::unique_ptr<TH1D> positionX;
   std::unique_ptr<TH1D> positionY;
   std::unique_ptr<TH1D> positionZ;
   std::unique_ptr<TH1D> collisionTime;
+};
+
+struct SourceCounts {
+  Long64_t collisions = 0;
+  Long64_t ionisationElectrons = 0;
+  Long64_t penningElectrons = 0;
+  Long64_t attachments = 0;
 };
 
 struct ElectronBirthSource {
@@ -153,9 +150,9 @@ struct ElectronBirthSource {
   int isPenning = 0;
 };
 
-std::vector<CollisionRecord> collisionRecords;
 std::vector<ElectronBirthSource> electronBirthSources;
 std::unordered_map<std::size_t, PreviousCollisionState> previousCollisions;
+std::map<std::string, SourceCounts> collisionSourceCounts;
 CollisionHistograms collisionHistograms;
 
 std::unique_ptr<TH1D> makeExtendableHistogram(const char* name,
@@ -171,6 +168,36 @@ std::unique_ptr<TH1D> makeExtendableHistogram(const char* name,
 }
 
 void initialiseCollisionHistograms(const double gap) {
+  collisionHistograms.energyBefore = makeExtendableHistogram(
+      "collision_energy_before",
+      "Energy at every real collision;energy before [eV];collisions", 300,
+      0., 100.);
+  collisionHistograms.energyAfter = makeExtendableHistogram(
+      "collision_energy_after",
+      "Energy after every real collision;energy after [eV];collisions", 300,
+      0., 100.);
+  collisionHistograms.attachmentEnergyBefore = makeExtendableHistogram(
+      "attachment_energy_before",
+      "Attached electron energy;energy before attachment [eV];electrons", 200,
+      0., 100.);
+  collisionHistograms.attachmentEnergyAfter = makeExtendableHistogram(
+      "attachment_energy_after",
+      "Post-collision attachment energy;energy after attachment [eV];electrons",
+      200, 0., 100.);
+  const std::array<std::pair<int, const char*>, 6> collisionTypes = {{
+      {ElectronCollisionTypeElastic, "elastic"},
+      {ElectronCollisionTypeIonisation, "ionisation"},
+      {ElectronCollisionTypeAttachment, "attachment"},
+      {ElectronCollisionTypeInelastic, "inelastic"},
+      {ElectronCollisionTypeExcitation, "excitation"},
+      {ElectronCollisionTypeSuperelastic, "superelastic"}}};
+  for (const auto& item : collisionTypes) {
+    const std::string name = std::string("collision_energy_") + item.second;
+    const std::string title = std::string(item.second) +
+                              " collision energy;energy before [eV];collisions";
+    collisionHistograms.energyByType[item.first] = makeExtendableHistogram(
+        name.c_str(), title.c_str(), 300, 0., 100.);
+  }
   collisionHistograms.fieldImpulseMagnitude = makeExtendableHistogram(
       "field_impulse_magnitude",
       "Electric-field impulse between collisions;|q integral E dt| [eV/c];flights",
@@ -221,19 +248,29 @@ void userHandleCollision(double x, double y, double z, double t, int type,
                          double energyAfter, double dxBefore, double dyBefore,
                          double dzBefore, double dxAfter, double dyAfter,
                          double dzAfter, std::size_t trackId,
-                         std::size_t parentTrackId, double fieldImpulseX,
+                         std::size_t, double fieldImpulseX,
                          double fieldImpulseY, double fieldImpulseZ) {
-  CollisionRecord record;
-  record.event = currentEventId;
-  record.trackId = static_cast<ULong64_t>(trackId);
-  record.parentTrackId = static_cast<ULong64_t>(parentTrackId);
-  record.hasParent = parentTrackId != NoTrackId;
-  record.type = type;
-  record.level = level;
-  getCollisionSource(medium, level, record.gasIndex, record.gasName,
-                     record.process, record.thresholdEnergy);
-  record.energyBefore = energyBefore;
-  record.energyAfter = energyAfter;
+  int gasIndex = -1;
+  std::string gasName;
+  std::string process;
+  double thresholdEnergy = 0.;
+  getCollisionSource(medium, level, gasIndex, gasName, process,
+                     thresholdEnergy);
+  auto& sourceCounts = collisionSourceCounts[gasName + " | " + process];
+  ++sourceCounts.collisions;
+
+  collisionHistograms.energyBefore->Fill(energyBefore);
+  collisionHistograms.energyAfter->Fill(energyAfter);
+  const auto energyHistogram = collisionHistograms.energyByType.find(type);
+  if (energyHistogram != collisionHistograms.energyByType.end()) {
+    energyHistogram->second->Fill(energyBefore);
+  }
+  if (type == ElectronCollisionTypeAttachment) {
+    ++sourceCounts.attachments;
+    collisionHistograms.attachmentEnergyBefore->Fill(energyBefore);
+    collisionHistograms.attachmentEnergyAfter->Fill(energyAfter);
+  }
+
   const double pBefore = momentumMagnitude(energyBefore);
   const double pAfter = momentumMagnitude(energyAfter);
   const double momentumBeforeX = pBefore * dxBefore;
@@ -251,21 +288,17 @@ void userHandleCollision(double x, double y, double z, double t, int type,
   collisionHistograms.positionY->Fill(y);
   collisionHistograms.positionZ->Fill(z);
   collisionHistograms.collisionTime->Fill(t);
-  record.isIonisation = type == ElectronCollisionTypeIonisation;
-  record.isAttachment = type == ElectronCollisionTypeAttachment;
 
-  auto previous = previousCollisions.find(trackId);
+  const auto previous = previousCollisions.find(trackId);
   if (previous != previousCollisions.end()) {
-    record.collisionIndex = previous->second.collisionIndex + 1;
     const double deltaPX = momentumBeforeX - previous->second.px;
     const double deltaPY = momentumBeforeY - previous->second.py;
     const double deltaPZ = momentumBeforeZ - previous->second.pz;
     collisionHistograms.freeFlightDeltaPMagnitude->Fill(
         std::sqrt(deltaPX * deltaPX + deltaPY * deltaPY + deltaPZ * deltaPZ));
   }
-  previousCollisions[trackId] = {record.collisionIndex, momentumAfterX,
-                                 momentumAfterY, momentumAfterZ};
-  collisionRecords.push_back(std::move(record));
+  previousCollisions[trackId] = {momentumAfterX, momentumAfterY,
+                                 momentumAfterZ};
 }
 
 void userHandleIonisation(double x, double y, double z, double t, int type,
@@ -279,14 +312,11 @@ void userHandleIonisation(double x, double y, double z, double t, int type,
   getCollisionSource(m, level, source.gasIndex, source.gasName,
                      source.process, thresholdEnergy);
   source.isPenning = type == ElectronCollisionTypeExcitation;
+  auto& sourceCounts =
+      collisionSourceCounts[source.gasName + " | " + source.process];
+  ++sourceCounts.ionisationElectrons;
+  if (source.isPenning) ++sourceCounts.penningElectrons;
   electronBirthSources.push_back(std::move(source));
-  if (type == ElectronCollisionTypeExcitation && !collisionRecords.empty()) {
-    auto& collision = collisionRecords.back();
-    if (collision.event == currentEventId && collision.level == level &&
-        collision.type == ElectronCollisionTypeExcitation) {
-      collision.isPenning = 1;
-    }
-  }
   drift->AddIon(x, y, z,
                tmin + timestep);  // ion added at the start of the next timestep
 }
@@ -438,81 +468,17 @@ void buildBinnedSpaceCharge(const double yMin, const double yMax,
 }
 
 void writeCollisionStatistics() {
-  TTree collisionTree("electron_collisions",
-                      "Detailed real electron collision records");
-  CollisionRecord row;
-  collisionTree.Branch("event", &row.event);
-  collisionTree.Branch("trackId", &row.trackId);
-  collisionTree.Branch("parentTrackId", &row.parentTrackId);
-  collisionTree.Branch("hasParent", &row.hasParent);
-  collisionTree.Branch("collisionIndex", &row.collisionIndex);
-  collisionTree.Branch("type", &row.type);
-  collisionTree.Branch("level", &row.level);
-  collisionTree.Branch("gasIndex", &row.gasIndex);
-  collisionTree.Branch("gasName", &row.gasName);
-  collisionTree.Branch("process", &row.process);
-  collisionTree.Branch("thresholdEnergy", &row.thresholdEnergy);
-  collisionTree.Branch("energyBefore", &row.energyBefore);
-  collisionTree.Branch("energyAfter", &row.energyAfter);
-  collisionTree.Branch("isIonisation", &row.isIonisation);
-  collisionTree.Branch("isAttachment", &row.isAttachment);
-  collisionTree.Branch("isPenning", &row.isPenning);
-
-  double maxEnergy = 1.;
-  for (const auto& collision : collisionRecords) {
-    maxEnergy = std::max(maxEnergy, collision.energyBefore);
-  }
-  maxEnergy *= 1.05;
-  TH1D collisionEnergy("collision_energy_before",
-                       "Energy at every real collision;energy before [eV];collisions",
-                       300, 0., maxEnergy);
-  TH1D attachmentEnergyBefore(
-      "attachment_energy_before",
-      "Attached electron energy;energy before attachment [eV];electrons", 200,
-      0., maxEnergy);
-  TH1D attachmentEnergyAfter(
-      "attachment_energy_after",
-      "Post-collision attachment energy;energy after attachment [eV];electrons",
-      200, 0., maxEnergy);
-  std::map<int, std::unique_ptr<TH1D>> energyByType;
-  const std::array<std::pair<int, const char*>, 6> collisionTypes = {{
-      {ElectronCollisionTypeElastic, "elastic"},
-      {ElectronCollisionTypeIonisation, "ionisation"},
-      {ElectronCollisionTypeAttachment, "attachment"},
-      {ElectronCollisionTypeInelastic, "inelastic"},
-      {ElectronCollisionTypeExcitation, "excitation"},
-      {ElectronCollisionTypeSuperelastic, "superelastic"}}};
-  for (const auto& item : collisionTypes) {
-    const std::string name = std::string("collision_energy_") + item.second;
-    const std::string title = std::string(item.second) +
-                              " collision energy;energy before [eV];collisions";
-    energyByType[item.first] =
-        std::make_unique<TH1D>(name.c_str(), title.c_str(), 300, 0., maxEnergy);
-  }
-  for (const auto& collision : collisionRecords) {
-    row = collision;
-    collisionTree.Fill();
-    collisionEnergy.Fill(collision.energyBefore);
-    if (collision.isAttachment) {
-      attachmentEnergyBefore.Fill(collision.energyBefore);
-      attachmentEnergyAfter.Fill(collision.energyAfter);
-    }
-    auto histogram = energyByType.find(collision.type);
-    if (histogram != energyByType.end()) {
-      histogram->second->Fill(collision.energyBefore);
-    }
-  }
-  collisionTree.Write();
-  collisionEnergy.Write();
-  attachmentEnergyBefore.Write();
-  attachmentEnergyAfter.Write();
+  collisionHistograms.energyBefore->Write();
+  collisionHistograms.energyAfter->Write();
+  collisionHistograms.attachmentEnergyBefore->Write();
+  collisionHistograms.attachmentEnergyAfter->Write();
   collisionHistograms.fieldImpulseMagnitude->Write();
   collisionHistograms.freeFlightDeltaPMagnitude->Write();
   collisionHistograms.positionX->Write();
   collisionHistograms.positionY->Write();
   collisionHistograms.positionZ->Write();
   collisionHistograms.collisionTime->Write();
-  for (auto& item : energyByType) item.second->Write();
+  for (auto& item : collisionHistograms.energyByType) item.second->Write();
 
   TTree birthTree("electron_birth_sources",
                   "Molecular source of avalanche-produced electrons");
@@ -530,23 +496,6 @@ void writeCollisionStatistics() {
   }
   birthTree.Write();
 
-  struct SourceCounts {
-    Long64_t collisions = 0;
-    Long64_t ionisationElectrons = 0;
-    Long64_t penningElectrons = 0;
-    Long64_t attachments = 0;
-  };
-  std::map<std::string, SourceCounts> counts;
-  for (const auto& collision : collisionRecords) {
-    const std::string key = collision.gasName + " | " + collision.process;
-    ++counts[key].collisions;
-    if (collision.isAttachment) ++counts[key].attachments;
-  }
-  for (const auto& source : electronBirthSources) {
-    const std::string key = source.gasName + " | " + source.process;
-    ++counts[key].ionisationElectrons;
-    if (source.isPenning) ++counts[key].penningElectrons;
-  }
   TTree sourceTree("collision_source_summary",
                    "Collision, ionisation and attachment counts by source");
   std::string sourceLabel;
@@ -557,7 +506,11 @@ void writeCollisionStatistics() {
   sourceTree.Branch("ionisationElectrons", &sourceIonisations);
   sourceTree.Branch("penningElectrons", &sourcePenning);
   sourceTree.Branch("attachments", &sourceAttachments);
-  const int nSources = std::max(1, static_cast<int>(counts.size()));
+  const int nSources =
+      std::max(1, static_cast<int>(collisionSourceCounts.size()));
+  TH1D collisionSources("collision_sources_all",
+                        "Real collision molecular sources;source;collisions",
+                        nSources, 0., nSources);
   TH1D ionisationSources("ionisation_electron_sources",
                          "Avalanche-electron molecular sources;source;electrons",
                          nSources, 0., nSources);
@@ -565,36 +518,54 @@ void writeCollisionStatistics() {
                          "Electron attachment molecular sources;source;electrons",
                          nSources, 0., nSources);
   int sourceBin = 1;
-  for (const auto& item : counts) {
+  for (const auto& item : collisionSourceCounts) {
     sourceLabel = item.first;
     sourceCollisions = item.second.collisions;
     sourceIonisations = item.second.ionisationElectrons;
     sourcePenning = item.second.penningElectrons;
     sourceAttachments = item.second.attachments;
     sourceTree.Fill();
+    collisionSources.GetXaxis()->SetBinLabel(sourceBin, sourceLabel.c_str());
     ionisationSources.GetXaxis()->SetBinLabel(sourceBin, sourceLabel.c_str());
     attachmentSources.GetXaxis()->SetBinLabel(sourceBin, sourceLabel.c_str());
+    collisionSources.SetBinContent(sourceBin, sourceCollisions);
     ionisationSources.SetBinContent(sourceBin, sourceIonisations);
     attachmentSources.SetBinContent(sourceBin, sourceAttachments);
     ++sourceBin;
   }
   sourceTree.Write();
+  collisionSources.Write();
   ionisationSources.Write();
   attachmentSources.Write();
 
   TCanvas* collisionCanvas =
-      new TCanvas("collision_statistics", "", 1100, 800);
-  collisionCanvas->Divide(2, 2);
+      new TCanvas("collision_statistics", "", 1200, 900);
+  collisionCanvas->Divide(3, 2);
   collisionCanvas->cd(1);
-  collisionEnergy.Draw();
+  collisionHistograms.energyBefore->Draw();
   collisionCanvas->cd(2);
-  attachmentEnergyBefore.Draw();
+  collisionHistograms.energyAfter->Draw();
   collisionCanvas->cd(3);
-  collisionHistograms.fieldImpulseMagnitude->Draw();
+  collisionHistograms.attachmentEnergyBefore->Draw();
   collisionCanvas->cd(4);
+  collisionHistograms.attachmentEnergyAfter->Draw();
+  collisionCanvas->cd(5);
+  collisionHistograms.fieldImpulseMagnitude->Draw();
+  collisionCanvas->cd(6);
   collisionHistograms.freeFlightDeltaPMagnitude->Draw();
   writeCanvasWithPngImage(collisionCanvas, "collision_statistics",
                           "collision_statistics_png");
+
+  TCanvas* typeCanvas =
+      new TCanvas("collision_energy_by_type", "", 1200, 800);
+  typeCanvas->Divide(3, 2);
+  int typePad = 1;
+  for (auto& item : collisionHistograms.energyByType) {
+    typeCanvas->cd(typePad++);
+    item.second->Draw();
+  }
+  writeCanvasWithPngImage(typeCanvas, "collision_energy_by_type",
+                          "collision_energy_by_type_png");
 
   TCanvas* positionCanvas =
       new TCanvas("collision_position_time_statistics", "", 1100, 800);
@@ -611,12 +582,15 @@ void writeCollisionStatistics() {
                           "collision_position_time_statistics",
                           "collision_position_time_statistics_png");
 
-  TCanvas* sourceCanvas = new TCanvas("collision_sources", "", 1200, 600);
-  sourceCanvas->Divide(2, 1);
+  TCanvas* sourceCanvas = new TCanvas("collision_sources", "", 1500, 600);
+  sourceCanvas->Divide(3, 1);
   sourceCanvas->cd(1);
+  collisionSources.LabelsOption("v", "X");
+  collisionSources.Draw("hist");
+  sourceCanvas->cd(2);
   ionisationSources.LabelsOption("v", "X");
   ionisationSources.Draw("hist");
-  sourceCanvas->cd(2);
+  sourceCanvas->cd(3);
   attachmentSources.LabelsOption("v", "X");
   attachmentSources.Draw("hist");
   writeCanvasWithPngImage(sourceCanvas, "collision_sources",

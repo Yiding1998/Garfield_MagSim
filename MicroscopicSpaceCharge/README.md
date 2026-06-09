@@ -1006,9 +1006,9 @@ stoppedByIonisationLimit
 
 ### 22.2 每次碰撞能量
 
-程序通过 `SetUserHandleCollision` 记录每一次真实电子碰撞。Null collision 不写入统计。
+程序通过 `SetUserHandleCollision` 在线统计每一次真实电子碰撞。Null collision 不写入统计。
 
-每次碰撞同时保存：
+回调会取得以下能量，但不再将每次碰撞逐行写入 TTree：
 
 ```text
 energyBefore
@@ -1017,9 +1017,10 @@ energyAfter
 
 单位均为 eV。默认碰撞能谱使用 `energyBefore`，表示电子真正发生该次碰撞时的入射动能。
 
-对应 ROOT 对象包括：
+这些能量在碰撞发生时直接填入 ROOT 直方图。对应 ROOT 对象包括：
 
 - `collision_energy_before`：全部真实碰撞的入射能量；
+- `collision_energy_after`：全部真实碰撞的末态能量；
 - `collision_energy_elastic`：弹性碰撞；
 - `collision_energy_ionisation`：电离碰撞；
 - `collision_energy_attachment`：吸附碰撞；
@@ -1144,25 +1145,19 @@ type = ElectronCollisionTypeExcitation
 isPenning = 1
 ```
 
-### 22.8 `electron_collisions` TTree
+### 22.8 碰撞明细存储策略
 
-该 TTree 每次真实碰撞一行，主要字段如下：
+程序不再创建 `electron_collisions` TTree，也不逐条保存 `energyBefore`、`energyAfter`、`gasName` 和 `process`。原因是一次高增益雪崩可产生数千万次碰撞，随机能量值和重复字符串会占据几乎全部 ROOT 文件空间。
 
-| 分支 | 含义 |
-| --- | --- |
-| `event` | 事例编号 |
-| `trackId` | 当前电子稳定轨迹编号 |
-| `parentTrackId` | 产生当前电子的母电子轨迹编号 |
-| `hasParent` | 是否具有母轨迹 |
-| `collisionIndex` | 当前电子内部的碰撞序号，从 0 开始 |
-| `type`, `level` | Garfield++ 碰撞类型和 Magboltz 能级 |
-| `gasIndex`, `gasName` | 碰撞气体组分 |
-| `process` | Magboltz 碰撞过程描述 |
-| `thresholdEnergy` | 该截面过程的阈值能量，单位 eV |
-| `energyBefore`, `energyAfter` | 碰撞前后动能，单位 eV |
-| `isIonisation` | 是否为直接电离碰撞 |
-| `isAttachment` | 是否为吸附碰撞 |
-| `isPenning` | 该激发碰撞是否产生 Penning 电子 |
+碰撞回调改为流式统计：
+
+- `energyBefore` 和 `energyAfter` 直接填入能谱直方图；
+- `gasName + process` 作为汇总键，只累计碰撞、电离和吸附次数；
+- 碰撞类型能谱直接按类型填入对应直方图；
+- 动量、位置和时间仍只保存汇总直方图；
+- 内存中不再保留完整的碰撞记录向量。
+
+因此，运行内存和 ROOT 文件大小均不再随逐碰撞明细线性增长。
 
 ### 22.9 来源汇总和图像
 
@@ -1175,6 +1170,9 @@ isPenning = 1
 
 图像对象包括：
 
+- `collision_energy_before` 和 `collision_energy_after`；
+- `collision_sources_all`：按分子和过程统计的全部真实碰撞数；
+- `collision_energy_by_type` 和 `collision_energy_by_type_png`；
 - `collision_statistics` 和 `collision_statistics_png`；
 - `collision_sources` 和 `collision_sources_png`；
 - `ionisation_electron_sources`；
@@ -1187,47 +1185,38 @@ isPenning = 1
 
 ### 22.10 ROOT 分析示例
 
-查看前 20 次碰撞：
+查看碰撞前后能谱：
 
 ```cpp
-electron_collisions->Scan(
-    "event:trackId:collisionIndex:type:gasName:energyBefore");
+collision_energy_before->Draw();
+collision_energy_after->Draw();
 ```
 
-只查看吸附碰撞：
+查看吸附能谱：
 
 ```cpp
-electron_collisions->Scan(
-    "event:trackId:gasName:process:energyBefore",
-    "isAttachment == 1");
+attachment_energy_before->Draw();
+attachment_energy_after->Draw();
 ```
 
-查看相邻碰撞总动量变化统计：
+查看相邻碰撞总动量变化和电场冲量：
 
 ```cpp
 free_flight_delta_p_magnitude->Draw();
-```
-
-查看电场冲量大小统计：
-
-```cpp
 field_impulse_magnitude->Draw();
 ```
 
-查看雪崩电子由哪些分子产生：
+查看碰撞、电离和吸附来源：
 
 ```cpp
-electron_birth_sources->Scan("gasName:process:isPenning");
-```
-
-查看来源汇总：
-
-```cpp
+collision_sources_all->Draw("hist");
+ionisation_electron_sources->Draw("hist");
+attachment_sources->Draw("hist");
 collision_source_summary->Scan();
 ```
 
 ### 22.11 数据量和性能
 
-`electron_collisions` 仍保存每次真实碰撞的能量、类型、轨迹编号和分子来源，但不再保存位置、时间、方向、动量分量、电场冲量和自由飞行动量变化的逐条数据。这些运动学量仅保存为汇总直方图和 PNG 图像，从而显著降低 ROOT 文件大小。
+`electron_collisions` 已完全取消。碰撞能量、碰撞类型、分子来源、过程来源、位置、时间、电场冲量和自由飞行动量变化均只保存为汇总直方图、汇总树和 PNG 图像。
 
-高增益事例仍可能产生大量能量和来源记录。若文件依然过大，可进一步用 `level` 映射表替代逐行重复的 `gasName` 和 `process` 字符串。
+旧文件中该树可占总空间的 99% 以上；取消逐碰撞明细后，文件大小主要由少量直方图、画布、PNG、电子末态和运行汇总决定。`electron_birth_sources` 仍按雪崩产生的电子逐行保存，通常远小于逐碰撞数据。
