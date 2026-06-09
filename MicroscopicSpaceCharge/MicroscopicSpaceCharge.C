@@ -628,7 +628,7 @@ int main(int argc, char* argv[]) {
   const bool plotField = true;
   const bool plotDrift = false;
   const bool enableAdaptiveTimestep = true;
-  constexpr std::size_t avalancheSizeLimit = 5000; // 5000
+  constexpr std::size_t avalancheSizeLimit = 50000; // 5000
   constexpr double spaceChargeBinWidth = 2.e-4;
   constexpr Long64_t maxTotalIonisations = 500000;  // 500000
 
